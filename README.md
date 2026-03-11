@@ -5,13 +5,7 @@ MCP (Model Context Protocol) server for [memU](https://memu.so) — expose the m
 ## Installation
 
 ```bash
-pip install memu-mcp
-```
-
-Or run directly with `uvx`:
-
-```bash
-uvx --from memu-mcp memu-mcp
+uvx --from git+https://github.com/De13ruyne/memU-mcp memu-mcp
 ```
 
 ## Authentication
@@ -47,7 +41,7 @@ Add to your MCP client config (Cursor, Claude Desktop, etc.):
   "mcpServers": {
     "memu": {
       "command": "uvx",
-      "args": ["--from", "memu-mcp", "memu-mcp"],
+      "args": ["--from", "git+https://github.com/De13ruyne/memU-mcp", "memu-mcp"],
       "env": {
         "MEMU_API_KEY": "<your-memu-token>"
       }
