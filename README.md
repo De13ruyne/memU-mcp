@@ -5,7 +5,7 @@ MCP (Model Context Protocol) server for [memU](https://memu.so) — expose the m
 
 ## Authentication
 
-memu-mcp requires a **memU API key** obtained from the [memU platform](https://app.memu.so/).
+memU-mcp requires a **memU API key** obtained from the [memU platform](https://app.memu.so/).
 
 1. Sign up at [memu.so](https://memu.so) and navigate to the API Keys section.
 2. Create a new API key for your project.
