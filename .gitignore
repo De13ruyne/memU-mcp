@@ -28,3 +28,6 @@ htmlcov/
 
 # Database (local dev)
 *.db
+
+# Runtime data
+data/
