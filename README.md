@@ -5,13 +5,7 @@ MCP (Model Context Protocol) server for [memU](https://github.com/NevaMind-AI/me
 ## Installation
 
 ```bash
-pip install memu-mcp
-```
-
-Or run directly with `uvx`:
-
-```bash
-uvx --from memu-mcp memu-mcp
+uvx --from git+https://github.com/De13ruyne/memU-mcp@local-sdk memu-mcp
 ```
 
 ## Authentication
@@ -50,7 +44,7 @@ Add to your MCP client config (Cursor, Claude Desktop, etc.):
   "mcpServers": {
     "memu": {
       "command": "uvx",
-      "args": ["--from", "memu-mcp", "memu-mcp"],
+      "args": ["--from", "git+https://github.com/De13ruyne/memU-mcp@local-sdk", "memu-mcp"],
       "env": {
         "MEMU_API_KEY": "<your-memu-token>",
         "OPENAI_API_KEY": "<your-openai-key>"
