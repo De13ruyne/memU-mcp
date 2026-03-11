@@ -2,11 +2,6 @@
 
 MCP (Model Context Protocol) server for [memU](https://memu.so) — expose the memU Cloud API as MCP tools.
 
-## Installation
-
-```bash
-uvx --from git+https://github.com/De13ruyne/memU-mcp memu-mcp
-```
 
 ## Authentication
 
@@ -24,17 +19,18 @@ All tool calls are authenticated via Bearer token against the memU Cloud API (`a
 
 ```bash
 # Requires MEMU_API_KEY env var
-memu-mcp
+uvx --from git+https://github.com/De13ruyne/memU-mcp memu-mcp
+
 
 # Explicit arguments
-memu-mcp \
+uvx --from git+https://github.com/De13ruyne/memU-mcp memu-mcp \
   --memu-api-key <your-memu-token> \
   --transport stdio
 ```
 
 ### MCP Client Configuration
 
-Add to your MCP client config (Cursor, Claude Desktop, etc.):
+Add to your MCP client config (OpenClaw, Cursor, Claude Desktop, etc.):
 
 ```json
 {
@@ -48,16 +44,6 @@ Add to your MCP client config (Cursor, Claude Desktop, etc.):
     }
   }
 }
-```
-
-### Programmatic
-
-```python
-from memu_mcp import MemuCloudClient, init_mcp_server, mcp_server
-
-client = MemuCloudClient(api_key="your-key")
-init_mcp_server(client)
-mcp_server.run(transport="stdio")
 ```
 
 ## Environment Variables
