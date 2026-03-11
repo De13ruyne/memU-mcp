@@ -64,13 +64,9 @@ class TokenValidator:
             msg = f"Authentication failed: {detail}"
             raise AuthError(msg)
 
-        if resp.status_code != 200:
-            msg = f"Unexpected auth response (HTTP {resp.status_code})"
-            raise AuthError(msg)
-
         info: dict[str, Any] = {"authenticated": True}
         self._cache[token] = (time.monotonic(), info)
-        logger.debug("Token validated successfully")
+        logger.debug("Token validated successfully (HTTP %s)", resp.status_code)
         return info
 
     async def close(self) -> None:

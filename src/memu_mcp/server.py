@@ -40,9 +40,22 @@ class MCPUserModel(BaseModel):
     session_id: str | None = None
 
 
+def _apply_compat_patches(service: MemoryService) -> None:
+    """Patch memu-py 1.4.0 bug: _patch_create_memory_item missing resource_id."""
+    repo = service.database.memory_item_repo
+    _orig_create_item = repo.create_item
+
+    def _patched_create_item(**kw: Any) -> Any:
+        kw.setdefault("resource_id", "")
+        return _orig_create_item(**kw)
+
+    repo.create_item = _patched_create_item  # type: ignore[method-assign]
+
+
 def init_mcp_server(service: MemoryService) -> Any:
     """Bind a MemoryService instance to the MCP server."""
     global _service
+    _apply_compat_patches(service)
     _service = service
     return mcp_server
 

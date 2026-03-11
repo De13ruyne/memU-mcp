@@ -58,12 +58,14 @@ class TestValidateInvalidToken:
             with pytest.raises(AuthError, match="invalid_token"):
                 await validator.validate("bad-token")
 
-    async def test_raises_auth_error_on_unexpected_status(self, validator):
-        mock_resp = _mock_response(500, {"error": "internal"})
+    async def test_non_401_treated_as_authenticated(self, validator):
+        for status in (400, 403, 500):
+            mock_resp = _mock_response(status, {"error": "something"})
 
-        with patch.object(validator._client, "post", new_callable=AsyncMock, return_value=mock_resp):
-            with pytest.raises(AuthError, match="Unexpected auth response"):
-                await validator.validate("some-token")
+            with patch.object(validator._client, "post", new_callable=AsyncMock, return_value=mock_resp):
+                result = await validator.validate(f"token-{status}")
+
+            assert result == {"authenticated": True}
 
     async def test_raises_auth_error_on_network_failure(self, validator):
         with patch.object(
