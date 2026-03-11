@@ -1,4 +1,4 @@
-"""MCP (Model Context Protocol) server for memU."""
+"""MCP (Model Context Protocol) server for memU Cloud API."""
 
 from __future__ import annotations
 
@@ -6,16 +6,9 @@ import contextlib
 import json
 import logging
 import os
-import tempfile
-import uuid
 from typing import Any
 
-from pydantic import BaseModel
-
-from memu.app.service import MemoryService
-from memu.database.models import MemoryType
-
-from memu_mcp.auth import AuthError, TokenValidator
+from memu_mcp.client import MemuCloudClient
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -27,79 +20,21 @@ logger = logging.getLogger("memu_mcp.server")
 
 mcp_server = FastMCP("memu")
 
-_service: MemoryService | None = None
-_token_validator: TokenValidator | None = None
-_memu_token: str | None = None
+_client: MemuCloudClient | None = None
 
 
-class MCPUserModel(BaseModel):
-    """Extended user scope model for MCP with agent and session support."""
-
-    user_id: str | None = None
-    agent_id: str | None = None
-    session_id: str | None = None
-
-
-def _apply_compat_patches(service: MemoryService) -> None:
-    """Patch memu-py 1.4.0 bug: _patch_create_memory_item missing resource_id."""
-    repo = service.database.memory_item_repo
-    _orig_create_item = repo.create_item
-
-    def _patched_create_item(**kw: Any) -> Any:
-        kw.setdefault("resource_id", "")
-        return _orig_create_item(**kw)
-
-    repo.create_item = _patched_create_item  # type: ignore[method-assign]
-
-
-def init_mcp_server(service: MemoryService) -> Any:
-    """Bind a MemoryService instance to the MCP server."""
-    global _service
-    _apply_compat_patches(service)
-    _service = service
+def init_mcp_server(client: MemuCloudClient) -> FastMCP:
+    """Bind a MemuCloudClient instance to the MCP server."""
+    global _client
+    _client = client
     return mcp_server
 
 
-def init_auth(token: str, api_base_url: str | None = None) -> None:
-    """Set up the token validator for memU cloud authentication."""
-    global _token_validator, _memu_token
-    _memu_token = token
-    kwargs: dict[str, Any] = {}
-    if api_base_url:
-        kwargs["api_base_url"] = api_base_url
-    _token_validator = TokenValidator(**kwargs)
-
-
-async def _require_auth() -> None:
-    """Validate the configured memU token. Raises on failure."""
-    if _token_validator is None or _memu_token is None:
-        msg = "memU authentication not configured. Provide MEMU_API_KEY."
+def _get_client() -> MemuCloudClient:
+    if _client is None:
+        msg = "MemuCloudClient not initialized. Call init_mcp_server() or use the memu-mcp CLI."
         raise RuntimeError(msg)
-    try:
-        await _token_validator.validate(_memu_token)
-    except AuthError:
-        logger.warning("Token validation failed")
-        raise
-
-
-def _get_service() -> MemoryService:
-    if _service is None:
-        msg = "MemoryService not initialized. Call init_mcp_server() or use the memu-mcp CLI."
-        raise RuntimeError(msg)
-    return _service
-
-
-def _build_scope(
-    user_id: str,
-    agent_id: str | None = None,
-    session_id: str | None = None,
-) -> dict[str, Any]:
-    scope: dict[str, Any] = {"user_id": user_id}
-    if agent_id:
-        scope["agent_id"] = agent_id
-    if session_id:
-        scope["session_id"] = session_id
-    return scope
+    return _client
 
 
 def _json(result: Any) -> str:
@@ -113,84 +48,72 @@ def _json(result: Any) -> str:
 
 @mcp_server.tool()
 async def memorize(
-    content: str,
+    conversation: list[dict[str, str]],
     user_id: str,
-    modality: str = "conversation",
-    agent_id: str | None = None,
-    session_id: str | None = None,
+    agent_id: str,
+    user_name: str | None = None,
+    agent_name: str | None = None,
+    session_date: str | None = None,
+    conversation_text: str | None = None,
 ) -> str:
-    """Save a conversation, document, or piece of knowledge to memory.
+    """Save a conversation to memU cloud memory (async). Returns a task_id for status polling.
+
+    The conversation must contain at least 3 messages. Each message is a dict
+    with "role" (e.g. "user", "assistant") and "content" keys.
 
     Args:
-        content: The text content to memorize.
-        user_id: User identifier for scoping.
-        modality: Content type - "conversation", "document", "image", "video", or "audio".
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
+        conversation: List of message dicts, each with "role" and "content" keys. Minimum 3 messages.
+        user_id: User identifier.
+        agent_id: Agent identifier.
+        user_name: Optional human-readable user name.
+        agent_name: Optional human-readable agent name.
+        session_date: Optional date string for the conversation session.
+        conversation_text: Optional pre-formatted conversation text.
     """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
+    client = _get_client()
+    result = await client.memorize(
+        conversation=conversation,
+        user_id=user_id,
+        agent_id=agent_id,
+        user_name=user_name,
+        agent_name=agent_name,
+        session_date=session_date,
+        conversation_text=conversation_text,
+    )
+    return _json(result)
 
-    filename = f"memu_mcp_{uuid.uuid4()}.txt"
-    file_path = os.path.join(tempfile.gettempdir(), filename)
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        result = await service.memorize(
-            resource_url=file_path,
-            modality=modality,
-            user=scope,
-        )
-        return _json(result)
-    finally:
-        if os.path.exists(file_path):
-            with contextlib.suppress(OSError):
-                os.remove(file_path)
+
+@mcp_server.tool()
+async def get_task_status(task_id: str) -> str:
+    """Check the status of an async memorization task.
+
+    Args:
+        task_id: The task ID returned by the memorize tool.
+    """
+    client = _get_client()
+    result = await client.get_task_status(task_id)
+    return _json(result)
 
 
 @mcp_server.tool()
 async def retrieve(
     query: str,
     user_id: str,
-    agent_id: str | None = None,
-    session_id: str | None = None,
+    agent_id: str,
 ) -> str:
     """Search for relevant memories based on a query.
 
     Args:
         query: The search query to find relevant memories.
-        user_id: User identifier for scoping.
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
+        user_id: User identifier.
+        agent_id: Agent identifier.
     """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.retrieve(
-        queries=[{"role": "user", "content": {"text": query}}],
-        where=scope,
+    client = _get_client()
+    result = await client.retrieve(
+        query=query,
+        user_id=user_id,
+        agent_id=agent_id,
     )
-    return _json(result)
-
-
-@mcp_server.tool()
-async def list_memories(
-    user_id: str,
-    agent_id: str | None = None,
-    session_id: str | None = None,
-) -> str:
-    """List all stored memory items for a user.
-
-    Args:
-        user_id: User identifier for scoping.
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
-    """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.list_memory_items(where=scope)
     return _json(result)
 
 
@@ -198,83 +121,17 @@ async def list_memories(
 async def list_categories(
     user_id: str,
     agent_id: str | None = None,
-    session_id: str | None = None,
 ) -> str:
     """List all memory categories for a user.
 
     Args:
-        user_id: User identifier for scoping.
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
+        user_id: User identifier.
+        agent_id: Optional agent identifier.
     """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.list_memory_categories(where=scope)
-    return _json(result)
-
-
-@mcp_server.tool()
-async def create_memory(
-    content: str,
-    user_id: str,
-    memory_type: MemoryType = "profile",
-    categories: list[str] | None = None,
-    agent_id: str | None = None,
-    session_id: str | None = None,
-) -> str:
-    """Manually create a memory item.
-
-    Args:
-        content: The memory content to store.
-        user_id: User identifier for scoping.
-        memory_type: Type of memory - "profile", "event", "knowledge", "behavior", "skill", or "tool".
-        categories: List of category names to assign the memory to.
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
-    """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.create_memory_item(
-        memory_type=memory_type,
-        memory_content=content,
-        memory_categories=categories or [],
-        user=scope,
-    )
-    return _json(result)
-
-
-@mcp_server.tool()
-async def update_memory(
-    memory_id: str,
-    user_id: str,
-    content: str | None = None,
-    memory_type: MemoryType | None = None,
-    categories: list[str] | None = None,
-    agent_id: str | None = None,
-    session_id: str | None = None,
-) -> str:
-    """Update an existing memory item.
-
-    Args:
-        memory_id: The ID of the memory item to update.
-        user_id: User identifier for scoping.
-        content: New memory content (optional).
-        memory_type: New memory type (optional) - "profile", "event", "knowledge", "behavior", "skill", or "tool".
-        categories: New list of category names (optional).
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
-    """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.update_memory_item(
-        memory_id=memory_id,
-        memory_type=memory_type,
-        memory_content=content,
-        memory_categories=categories,
-        user=scope,
+    client = _get_client()
+    result = await client.list_categories(
+        user_id=user_id,
+        agent_id=agent_id,
     )
     return _json(result)
 
@@ -284,22 +141,19 @@ async def delete_memory(
     memory_id: str,
     user_id: str,
     agent_id: str | None = None,
-    session_id: str | None = None,
 ) -> str:
     """Delete a specific memory item by ID.
 
     Args:
         memory_id: The ID of the memory item to delete.
-        user_id: User identifier for scoping.
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
+        user_id: User identifier.
+        agent_id: Optional agent identifier.
     """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.delete_memory_item(
+    client = _get_client()
+    result = await client.delete_memory(
         memory_id=memory_id,
-        user=scope,
+        user_id=user_id,
+        agent_id=agent_id,
     )
     return _json(result)
 
@@ -308,19 +162,18 @@ async def delete_memory(
 async def clear_memory(
     user_id: str,
     agent_id: str | None = None,
-    session_id: str | None = None,
 ) -> str:
     """Clear all memories for a user. This action is irreversible.
 
     Args:
-        user_id: User identifier for scoping.
-        agent_id: Optional agent identifier for multi-agent scoping.
-        session_id: Optional session identifier for session scoping.
+        user_id: User identifier.
+        agent_id: Optional agent identifier.
     """
-    await _require_auth()
-    service = _get_service()
-    scope = _build_scope(user_id, agent_id, session_id)
-    result = await service.clear_memory(where=scope)
+    client = _get_client()
+    result = await client.clear_memory(
+        user_id=user_id,
+        agent_id=agent_id,
+    )
     return _json(result)
 
 
@@ -336,24 +189,6 @@ def _resolve(cli_value: str | None, env_key: str, default: str | None = None) ->
     return os.environ.get(env_key, default)
 
 
-def _build_database_config(db: str, db_path: str | None, db_dsn: str | None) -> dict[str, Any]:
-    if db == "sqlite":
-        dsn = db_path or "sqlite:///memu.db"
-        if not dsn.startswith("sqlite"):
-            dsn = f"sqlite:///{dsn}"
-        return {
-            "metadata_store": {"provider": "sqlite", "dsn": dsn},
-        }
-    if db == "postgres":
-        if not db_dsn:
-            msg = "PostgreSQL requires --db-dsn or MEMU_DB_DSN"
-            raise ValueError(msg)
-        return {
-            "metadata_store": {"provider": "postgres", "dsn": db_dsn},
-        }
-    return {"metadata_store": {"provider": "inmemory"}}
-
-
 def main() -> None:
     """CLI entry point for the memU MCP server."""
     import argparse
@@ -364,30 +199,10 @@ def main() -> None:
         load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="memU MCP Server - Expose MemoryService as MCP tools",
+        description="memU MCP Server - memU Cloud API as MCP tools",
     )
-    parser.add_argument("--memu-api-key", default=None, help="memU API key / OAuth token (env: MEMU_API_KEY)")
+    parser.add_argument("--memu-api-key", default=None, help="memU API key (env: MEMU_API_KEY)")
     parser.add_argument("--api-base-url", default=None, help="memU API base URL (env: MEMU_API_BASE_URL)")
-    parser.add_argument("--api-key", default=None, help="LLM API key (env: OPENAI_API_KEY)")
-    parser.add_argument("--base-url", default=None, help="LLM base URL (env: OPENAI_BASE_URL)")
-    parser.add_argument("--chat-model", default=None, help="Chat model name (env: MEMU_CHAT_MODEL)")
-    parser.add_argument("--embed-model", default=None, help="Embedding model name (env: MEMU_EMBED_MODEL)")
-    parser.add_argument(
-        "--embed-api-key", default=None, help="Embedding API key, if different from --api-key (env: MEMU_EMBED_API_KEY)"
-    )
-    parser.add_argument(
-        "--embed-base-url",
-        default=None,
-        help="Embedding base URL, if different from --base-url (env: MEMU_EMBED_BASE_URL)",
-    )
-    parser.add_argument(
-        "--db",
-        default=None,
-        choices=["inmemory", "sqlite", "postgres"],
-        help="Storage backend (env: MEMU_DB, default: inmemory)",
-    )
-    parser.add_argument("--db-path", default=None, help="SQLite database path (env: MEMU_DB_PATH)")
-    parser.add_argument("--db-dsn", default=None, help="PostgreSQL DSN (env: MEMU_DB_DSN)")
     parser.add_argument(
         "--transport",
         default="stdio",
@@ -401,43 +216,10 @@ def main() -> None:
     if not memu_api_key:
         parser.error("memU API key is required. Set --memu-api-key or MEMU_API_KEY environment variable.")
 
-    api_base_url = _resolve(args.api_base_url, "MEMU_API_BASE_URL")
-    init_auth(memu_api_key, api_base_url=api_base_url)
+    api_base_url = _resolve(args.api_base_url, "MEMU_API_BASE_URL") or "https://api.memu.so"
 
-    api_key = _resolve(args.api_key, "OPENAI_API_KEY")
-    if not api_key:
-        parser.error("LLM API key is required. Set --api-key or OPENAI_API_KEY environment variable.")
+    client = MemuCloudClient(api_key=memu_api_key, base_url=api_base_url)
+    init_mcp_server(client)
 
-    base_url = _resolve(args.base_url, "OPENAI_BASE_URL", "https://api.openai.com/v1")
-    chat_model = _resolve(args.chat_model, "MEMU_CHAT_MODEL", "gpt-4o-mini")
-    embed_model = _resolve(args.embed_model, "MEMU_EMBED_MODEL")
-    embed_api_key = _resolve(args.embed_api_key, "MEMU_EMBED_API_KEY")
-    embed_base_url = _resolve(args.embed_base_url, "MEMU_EMBED_BASE_URL")
-    db = _resolve(args.db, "MEMU_DB", "inmemory") or "inmemory"
-    db_path = _resolve(args.db_path, "MEMU_DB_PATH")
-    db_dsn = _resolve(args.db_dsn, "MEMU_DB_DSN")
-
-    llm_default: dict[str, Any] = {
-        "api_key": api_key,
-        "base_url": base_url,
-        "chat_model": chat_model,
-    }
-    llm_profiles: dict[str, Any] = {"default": llm_default}
-    if embed_model or embed_api_key or embed_base_url:
-        llm_profiles["embedding"] = {
-            "api_key": embed_api_key or api_key,
-            "base_url": embed_base_url or base_url,
-            "embed_model": embed_model,
-        }
-
-    database_config = _build_database_config(db, db_path, db_dsn)
-
-    service = MemoryService(
-        llm_profiles=llm_profiles,
-        database_config=database_config,
-        user_config={"model": MCPUserModel},
-    )
-    init_mcp_server(service)
-
-    logger.info("Starting memU MCP server (transport=%s, db=%s)", args.transport, db)
+    logger.info("Starting memU MCP server (transport=%s, base_url=%s)", args.transport, api_base_url)
     mcp_server.run(transport=args.transport)
