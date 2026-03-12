@@ -1,6 +1,6 @@
 # memu-mcp
 
-MCP (Model Context Protocol) server for [memU](https://github.com/NevaMind-AI/memU) — expose MemoryService as MCP tools with cloud authentication.
+MCP (Model Context Protocol) server for [memU](https://github.com/NevaMind-AI/memU) — expose MemoryService as MCP tools.
 
 ## Installation
 
@@ -8,27 +8,16 @@ MCP (Model Context Protocol) server for [memU](https://github.com/NevaMind-AI/me
 uvx --from git+https://github.com/De13ruyne/memU-mcp@local-sdk memu-mcp
 ```
 
-## Authentication
-
-memu-mcp requires a **memU API key** obtained from the [memU platform](https://app.memu.so/).
-
-1. Sign up at [memu.so](https://memu.so) and navigate to the API Keys section.
-2. Create a new API key for your project.
-3. Pass the key to the MCP server via the `MEMU_API_KEY` environment variable or `--memu-api-key` CLI argument.
-
-Every tool call is validated against the memU cloud API (`api.memu.so`). Tokens are cached locally for 5 minutes to minimize latency.
-
 ## Usage
 
 ### CLI
 
 ```bash
-# Minimal — requires MEMU_API_KEY and OPENAI_API_KEY env vars
+# Minimal — requires OPENAI_API_KEY env var
 memu-mcp
 
 # Explicit arguments
 memu-mcp \
-  --memu-api-key <your-memu-token> \
   --api-key <your-openai-key> \
   --db sqlite \
   --db-path ./memu.db \
@@ -46,7 +35,6 @@ Add to your MCP client config (Cursor, Claude Desktop, etc.):
       "command": "uvx",
       "args": ["--from", "git+https://github.com/De13ruyne/memU-mcp@local-sdk", "memu-mcp"],
       "env": {
-        "MEMU_API_KEY": "<your-memu-token>",
         "OPENAI_API_KEY": "<your-openai-key>"
       }
     }
@@ -69,8 +57,6 @@ mcp_server.run(transport="stdio")
 
 | Variable | Description | Required |
 |---|---|---|
-| `MEMU_API_KEY` | memU OAuth token for cloud authentication | Yes |
-| `MEMU_API_BASE_URL` | Custom memU API base URL (default: `https://api.memu.so`) | No |
 | `OPENAI_API_KEY` | OpenAI-compatible API key for LLM | Yes |
 | `OPENAI_BASE_URL` | LLM base URL (default: `https://api.openai.com/v1`) | No |
 | `MEMU_CHAT_MODEL` | Chat model name (default: `gpt-4o-mini`) | No |
