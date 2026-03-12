@@ -2,25 +2,37 @@
 
 MCP (Model Context Protocol) server for [memU](https://github.com/NevaMind-AI/memU) — expose MemoryService as MCP tools.
 
-## Installation
+## Quick Start
+
+Use `uvx` to install and run directly from GitHub (no manual clone needed):
 
 ```bash
-uvx --from git+https://github.com/De13ruyne/memU-mcp@local-sdk memu-mcp
+uvx --from "git+https://github.com/De13ruyne/memU-mcp@local-sdk" memu-mcp \
+  --db sqlite \
+  --db-path ~/.memu/memu.db
 ```
+
+> Requires `OPENAI_API_KEY` (or compatible API key) set in your environment.
 
 ## Usage
 
 ### CLI
 
 ```bash
-# Minimal — requires OPENAI_API_KEY env var
-memu-mcp
+# Minimal — uses inmemory storage (data lost on exit)
+uvx --from "git+https://github.com/De13ruyne/memU-mcp@local-sdk" memu-mcp
 
-# Explicit arguments
-memu-mcp \
-  --api-key <your-openai-key> \
+# With SQLite persistence
+uvx --from "git+https://github.com/De13ruyne/memU-mcp@local-sdk" memu-mcp \
   --db sqlite \
-  --db-path ./memu.db \
+  --db-path ~/.memu/memu.db
+
+# Full options
+uvx --from "git+https://github.com/De13ruyne/memU-mcp@local-sdk" memu-mcp \
+  --api-key <your-api-key> \
+  --base-url https://openrouter.ai/api/v1 \
+  --db sqlite \
+  --db-path ~/.memu/memu.db \
   --transport stdio
 ```
 
@@ -33,13 +45,29 @@ Add to your MCP client config (Cursor, Claude Desktop, etc.):
   "mcpServers": {
     "memu": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/De13ruyne/memU-mcp@local-sdk", "memu-mcp"],
+      "args": [
+        "--from",
+        "git+https://github.com/De13ruyne/memU-mcp@local-sdk",
+        "memu-mcp",
+        "--db", "sqlite",
+        "--db-path", "~/.memu/memu.db"
+      ],
       "env": {
-        "OPENAI_API_KEY": "<your-openai-key>"
+        "OPENAI_API_KEY": "<your-api-key>",
+        "OPENAI_BASE_URL": "https://openrouter.ai/api/v1"
       }
     }
   }
 }
+```
+
+### Local Development
+
+If you have the repo cloned locally:
+
+```bash
+cd memU-mcp
+uv run memu-mcp --db sqlite --db-path ./memu.db
 ```
 
 ### Programmatic
