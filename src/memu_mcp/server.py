@@ -128,6 +128,15 @@ def _apply_sqlite_compat_patches() -> None:
     _schema.get_sqlite_sqlalchemy_models = _patched_get_models
     _sqlite_mod.get_sqlite_sqlalchemy_models = _patched_get_models
 
+    # #region agent log
+    _debug_log("_apply_sqlite_compat_patches completed", {
+        "sa_type_patched": _sqlmodel_main.get_sqlalchemy_type is _patched_get_sa_type,
+        "schema_patched": _schema.get_sqlite_sqlalchemy_models is _patched_get_models,
+        "sqlite_mod_patched": _sqlite_mod.get_sqlite_sqlalchemy_models is _patched_get_models,
+        "runId": "post-fix",
+    })
+    # #endregion
+
 
 def init_mcp_server(service: MemoryService) -> Any:
     """Bind a MemoryService instance to the MCP server."""
@@ -388,6 +397,13 @@ def _build_database_config(db: str, db_path: str | None, db_dsn: str | None) -> 
         dsn = db_path or "sqlite:///memu.db"
         if not dsn.startswith("sqlite"):
             dsn = f"sqlite:///{dsn}"
+        prefix = "sqlite:///"
+        if dsn.startswith(prefix):
+            raw_path = dsn[len(prefix):]
+            expanded = os.path.expanduser(raw_path)
+            parent = os.path.dirname(os.path.abspath(expanded))
+            os.makedirs(parent, exist_ok=True)
+            dsn = f"{prefix}{expanded}"
         return {
             "metadata_store": {"provider": "sqlite", "dsn": dsn},
         }
@@ -531,12 +547,30 @@ def main() -> None:
 
     # #region agent log
     _debug_log("Creating MemoryService...", {"db": db, "runId": "post-fix"})
+    import sqlmodel.main as _sm_check
+    _debug_log("Patch verification", {
+        "get_sqlalchemy_type_patched": "patched" in getattr(_sm_check.get_sqlalchemy_type, "__qualname__", ""),
+        "get_sqlalchemy_type_name": _sm_check.get_sqlalchemy_type.__qualname__,
+        "runId": "post-fix",
+    })
     # #endregion
-    service = MemoryService(
-        llm_profiles=llm_profiles,
-        database_config=database_config,
-        user_config={"model": MCPUserModel},
-    )
+    try:
+        service = MemoryService(
+            llm_profiles=llm_profiles,
+            database_config=database_config,
+            user_config={"model": MCPUserModel},
+        )
+    except Exception as _exc:
+        # #region agent log
+        import traceback as _tb
+        _debug_log("MemoryService construction FAILED", {
+            "error": str(_exc),
+            "type": type(_exc).__name__,
+            "tb_lines": _tb.format_exc().strip().split("\n")[-5:],
+            "runId": "post-fix",
+        })
+        # #endregion
+        raise
     # #region agent log
     _debug_log("MemoryService created successfully!", {"db_type": type(service.database).__name__, "runId": "post-fix"})
     # #endregion
