@@ -788,7 +788,6 @@ name = "memu-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "httpx" },
     { name = "mcp" },
     { name = "memu-py" },
     { name = "python-dotenv" },
@@ -814,7 +813,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.28.0" },
     { name = "mcp", specifier = ">=1.0" },
     { name = "memu-py", specifier = ">=1.4.0" },
     { name = "python-dotenv", specifier = ">=1.0" },

@@ -1,13 +1,12 @@
 [project]
 name = "memu-mcp"
 version = "0.1.0"
-description = "MCP server for memU - Expose MemoryService as MCP tools with cloud auth"
+description = "MCP server for memU - Expose MemoryService as MCP tools"
 requires-python = ">=3.13"
 dependencies = [
     "memu-py>=1.4.0",
     "mcp>=1.0",
     "python-dotenv>=1.0",
-    "httpx>=0.28.0",
 ]
 
 [build-system]

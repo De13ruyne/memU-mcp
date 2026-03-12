@@ -81,14 +81,6 @@ def _insert_item(service: MemoryService, summary: str, user_data: dict[str, Any]
     return item.id
 
 
-@pytest.fixture(autouse=True)
-def _bypass_auth(monkeypatch):
-    """Bypass memU cloud auth for all server tests."""
-    import memu_mcp.server as mcp_mod
-
-    monkeypatch.setattr(mcp_mod, "_require_auth", AsyncMock())
-
-
 @pytest.fixture()
 def service():
     svc = _make_service()

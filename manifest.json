@@ -21,7 +21,6 @@
         "memu-mcp"
       ],
       "env": {
-        "MEMU_API_KEY": "${user_config.memu_api_key}",
         "OPENAI_API_KEY": "${user_config.api_key}"
       }
     }
@@ -61,13 +60,6 @@
     }
   ],
   "user_config": {
-    "memu_api_key": {
-      "type": "string",
-      "title": "memU API Key",
-      "description": "memU OAuth token for cloud authentication",
-      "required": true,
-      "sensitive": true
-    },
     "api_key": {
       "type": "string",
       "title": "LLM API Key",

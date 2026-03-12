@@ -15,8 +15,6 @@ from pydantic import BaseModel
 from memu.app.service import MemoryService
 from memu.database.models import MemoryType
 
-from memu_mcp.auth import AuthError, TokenValidator
-
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError as e:
@@ -28,8 +26,6 @@ logger = logging.getLogger("memu_mcp.server")
 mcp_server = FastMCP("memu")
 
 _service: MemoryService | None = None
-_token_validator: TokenValidator | None = None
-_memu_token: str | None = None
 
 
 class MCPUserModel(BaseModel):
@@ -58,28 +54,6 @@ def init_mcp_server(service: MemoryService) -> Any:
     _apply_compat_patches(service)
     _service = service
     return mcp_server
-
-
-def init_auth(token: str, api_base_url: str | None = None) -> None:
-    """Set up the token validator for memU cloud authentication."""
-    global _token_validator, _memu_token
-    _memu_token = token
-    kwargs: dict[str, Any] = {}
-    if api_base_url:
-        kwargs["api_base_url"] = api_base_url
-    _token_validator = TokenValidator(**kwargs)
-
-
-async def _require_auth() -> None:
-    """Validate the configured memU token. Raises on failure."""
-    if _token_validator is None or _memu_token is None:
-        msg = "memU authentication not configured. Provide MEMU_API_KEY."
-        raise RuntimeError(msg)
-    try:
-        await _token_validator.validate(_memu_token)
-    except AuthError:
-        logger.warning("Token validation failed")
-        raise
 
 
 def _get_service() -> MemoryService:
@@ -128,7 +102,6 @@ async def memorize(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
 
@@ -164,7 +137,6 @@ async def retrieve(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.retrieve(
@@ -187,7 +159,6 @@ async def list_memories(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.list_memory_items(where=scope)
@@ -207,7 +178,6 @@ async def list_categories(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.list_memory_categories(where=scope)
@@ -233,7 +203,6 @@ async def create_memory(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.create_memory_item(
@@ -266,7 +235,6 @@ async def update_memory(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.update_memory_item(
@@ -294,7 +262,6 @@ async def delete_memory(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.delete_memory_item(
@@ -317,7 +284,6 @@ async def clear_memory(
         agent_id: Optional agent identifier for multi-agent scoping.
         session_id: Optional session identifier for session scoping.
     """
-    await _require_auth()
     service = _get_service()
     scope = _build_scope(user_id, agent_id, session_id)
     result = await service.clear_memory(where=scope)
@@ -366,8 +332,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="memU MCP Server - Expose MemoryService as MCP tools",
     )
-    parser.add_argument("--memu-api-key", default=None, help="memU API key / OAuth token (env: MEMU_API_KEY)")
-    parser.add_argument("--api-base-url", default=None, help="memU API base URL (env: MEMU_API_BASE_URL)")
     parser.add_argument("--api-key", default=None, help="LLM API key (env: OPENAI_API_KEY)")
     parser.add_argument("--base-url", default=None, help="LLM base URL (env: OPENAI_BASE_URL)")
     parser.add_argument("--chat-model", default=None, help="Chat model name (env: MEMU_CHAT_MODEL)")
@@ -396,13 +360,6 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-
-    memu_api_key = _resolve(args.memu_api_key, "MEMU_API_KEY")
-    if not memu_api_key:
-        parser.error("memU API key is required. Set --memu-api-key or MEMU_API_KEY environment variable.")
-
-    api_base_url = _resolve(args.api_base_url, "MEMU_API_BASE_URL")
-    init_auth(memu_api_key, api_base_url=api_base_url)
 
     api_key = _resolve(args.api_key, "OPENAI_API_KEY")
     if not api_key:
