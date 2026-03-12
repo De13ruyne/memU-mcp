@@ -87,6 +87,17 @@ def _apply_sqlite_compat_patches() -> None:
 
     _schema._MODEL_CACHE.clear()
 
+    # Bug 3: strip @property descriptors immediately so they can't leak
+    # as raw property objects during Pydantic v2 serialisation.
+    from memu.database.sqlite.models import (
+        SQLiteMemoryCategoryModel,
+        SQLiteMemoryItemModel,
+        SQLiteResourceModel,
+    )
+    for _cls in (SQLiteResourceModel, SQLiteMemoryItemModel, SQLiteMemoryCategoryModel):
+        if "embedding" in _cls.__dict__ and isinstance(_cls.__dict__["embedding"], property):
+            delattr(_cls, "embedding")
+
     def _patched_get_models(*, scope_model: type[BaseModel] | None = None) -> Any:
         from sqlalchemy import MetaData
         from sqlmodel import SQLModel
@@ -98,11 +109,6 @@ def _apply_sqlite_compat_patches() -> None:
             SQLiteResourceModel,
             build_sqlite_table_model,
         )
-
-        # Bug 3: strip @property descriptors so embedding works as a plain field.
-        for _cls in (SQLiteResourceModel, SQLiteMemoryItemModel, SQLiteMemoryCategoryModel):
-            if "embedding" in _cls.__dict__ and isinstance(_cls.__dict__["embedding"], property):
-                delattr(_cls, "embedding")
 
         scope = scope_model or BaseModel
         cached = _schema._MODEL_CACHE.get(scope)
