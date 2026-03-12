@@ -60,6 +60,13 @@ def _apply_sqlite_compat_patches() -> None:
 
     Bug 2: Table names use the ``sqlite_`` prefix which is reserved by SQLite.
     Fix: replace ``get_sqlite_sqlalchemy_models`` to use ``memu_`` prefix.
+
+    Bug 3: The ``@property embedding`` descriptors from Bug 1 survive in the
+    class ``__dict__`` and leak as raw ``property`` objects when Pydantic v2
+    serialises instances, causing ``Object of type property is not JSON
+    serializable``.  Fix: strip the descriptors before building table models
+    so ``embedding`` falls back to the inherited Pydantic field (which Bug 1
+    already maps to a ``JSON`` column).
     """
     import sqlmodel.main as _sqlmodel_main
 
@@ -91,6 +98,11 @@ def _apply_sqlite_compat_patches() -> None:
             SQLiteResourceModel,
             build_sqlite_table_model,
         )
+
+        # Bug 3: strip @property descriptors so embedding works as a plain field.
+        for _cls in (SQLiteResourceModel, SQLiteMemoryItemModel, SQLiteMemoryCategoryModel):
+            if "embedding" in _cls.__dict__ and isinstance(_cls.__dict__["embedding"], property):
+                delattr(_cls, "embedding")
 
         scope = scope_model or BaseModel
         cached = _schema._MODEL_CACHE.get(scope)
@@ -127,15 +139,6 @@ def _apply_sqlite_compat_patches() -> None:
 
     _schema.get_sqlite_sqlalchemy_models = _patched_get_models
     _sqlite_mod.get_sqlite_sqlalchemy_models = _patched_get_models
-
-    # #region agent log
-    _debug_log("_apply_sqlite_compat_patches completed", {
-        "sa_type_patched": _sqlmodel_main.get_sqlalchemy_type is _patched_get_sa_type,
-        "schema_patched": _schema.get_sqlite_sqlalchemy_models is _patched_get_models,
-        "sqlite_mod_patched": _sqlite_mod.get_sqlite_sqlalchemy_models is _patched_get_models,
-        "runId": "post-fix",
-    })
-    # #endregion
 
 
 def init_mcp_server(service: MemoryService) -> Any:
@@ -417,57 +420,6 @@ def _build_database_config(db: str, db_path: str | None, db_dsn: str | None) -> 
     return {"metadata_store": {"provider": "inmemory"}}
 
 
-def _debug_log(msg: str, data: dict[str, Any] | None = None) -> None:
-    """Write a debug log entry to the debug log file."""
-    # #region agent log
-    import time as _time
-    _log_path = "/Users/yin/memU-mcp/.cursor/debug-f663d3.log"
-    _entry = {"sessionId": "f663d3", "timestamp": int(_time.time() * 1000), "location": "server.py", "message": msg, "data": data or {}}
-    try:
-        with open(_log_path, "a") as _f:
-            _f.write(json.dumps(_entry, default=str) + "\n")
-    except Exception:
-        pass
-    # #endregion
-
-
-def _diagnose_sqlite_models() -> None:
-    """Diagnose SQLite model field issues before MemoryService construction."""
-    # #region agent log
-    try:
-        from memu.database.sqlite.models import SQLiteResourceModel, SQLiteMemoryItemModel, SQLiteMemoryCategoryModel
-        from memu.database.models import Resource, MemoryItem, MemoryCategory
-
-        _debug_log("H-A: Resource.model_fields keys", {"fields": list(Resource.model_fields.keys()), "hypothesisId": "A"})
-        _debug_log("H-A: SQLiteResourceModel.model_fields keys", {"fields": list(SQLiteResourceModel.model_fields.keys()), "hypothesisId": "A"})
-        _debug_log("H-A: 'embedding' in SQLiteResourceModel.model_fields", {"result": "embedding" in SQLiteResourceModel.model_fields, "hypothesisId": "A"})
-
-        embedding_attr = SQLiteResourceModel.__dict__.get("embedding")
-        _debug_log("H-C: SQLiteResourceModel.__dict__['embedding'] type", {"type": str(type(embedding_attr)), "is_property": isinstance(embedding_attr, property), "hypothesisId": "C"})
-
-        for cls in SQLiteResourceModel.__mro__:
-            if "embedding" in getattr(cls, "__annotations__", {}):
-                ann = cls.__annotations__["embedding"]
-                _debug_log("H-B: 'embedding' annotation found in MRO", {"class": cls.__name__, "annotation": str(ann), "annotation_type": str(type(ann)), "hypothesisId": "B"})
-
-        _debug_log("H-D: MCPUserModel bases", {"bases": [b.__name__ for b in MCPUserModel.__mro__], "hypothesisId": "D"})
-        _debug_log("H-D: SQLiteResourceModel bases", {"bases": [b.__name__ for b in SQLiteResourceModel.__mro__], "hypothesisId": "D"})
-
-        merged = type("TestMerged", (MCPUserModel, SQLiteResourceModel), {"__module__": __name__})
-        _debug_log("H-A: Merged model_fields keys", {"fields": list(merged.model_fields.keys()), "hypothesisId": "A"})
-        _debug_log("H-A: 'embedding' in merged.model_fields", {"result": "embedding" in merged.model_fields, "hypothesisId": "A"})
-
-        merged_embedding_attr = merged.__dict__.get("embedding")
-        for cls in merged.__mro__:
-            if "embedding" in cls.__dict__:
-                _debug_log("H-C: 'embedding' in __dict__ of MRO class", {"class": cls.__name__, "type": str(type(cls.__dict__["embedding"])), "hypothesisId": "C"})
-                break
-
-    except Exception as exc:
-        _debug_log("Diagnostic error", {"error": str(exc), "type": type(exc).__name__})
-    # #endregion
-
-
 def main() -> None:
     """CLI entry point for the memU MCP server."""
     import argparse
@@ -522,11 +474,6 @@ def main() -> None:
     db_path = _resolve(args.db_path, "MEMU_DB_PATH")
     db_dsn = _resolve(args.db_dsn, "MEMU_DB_DSN")
 
-    # #region agent log
-    _debug_log("main() started", {"db": db, "db_path": db_path, "hypothesisId": "A"})
-    _diagnose_sqlite_models()
-    # #endregion
-
     if db == "sqlite":
         _apply_sqlite_compat_patches()
 
@@ -545,35 +492,11 @@ def main() -> None:
 
     database_config = _build_database_config(db, db_path, db_dsn)
 
-    # #region agent log
-    _debug_log("Creating MemoryService...", {"db": db, "runId": "post-fix"})
-    import sqlmodel.main as _sm_check
-    _debug_log("Patch verification", {
-        "get_sqlalchemy_type_patched": "patched" in getattr(_sm_check.get_sqlalchemy_type, "__qualname__", ""),
-        "get_sqlalchemy_type_name": _sm_check.get_sqlalchemy_type.__qualname__,
-        "runId": "post-fix",
-    })
-    # #endregion
-    try:
-        service = MemoryService(
-            llm_profiles=llm_profiles,
-            database_config=database_config,
-            user_config={"model": MCPUserModel},
-        )
-    except Exception as _exc:
-        # #region agent log
-        import traceback as _tb
-        _debug_log("MemoryService construction FAILED", {
-            "error": str(_exc),
-            "type": type(_exc).__name__,
-            "tb_lines": _tb.format_exc().strip().split("\n")[-5:],
-            "runId": "post-fix",
-        })
-        # #endregion
-        raise
-    # #region agent log
-    _debug_log("MemoryService created successfully!", {"db_type": type(service.database).__name__, "runId": "post-fix"})
-    # #endregion
+    service = MemoryService(
+        llm_profiles=llm_profiles,
+        database_config=database_config,
+        user_config={"model": MCPUserModel},
+    )
     init_mcp_server(service)
 
     logger.info("Starting memU MCP server (transport=%s, db=%s)", args.transport, db)
