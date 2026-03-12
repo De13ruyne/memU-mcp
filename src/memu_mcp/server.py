@@ -48,6 +48,87 @@ def _apply_compat_patches(service: MemoryService) -> None:
     repo.create_item = _patched_create_item  # type: ignore[method-assign]
 
 
+def _apply_sqlite_compat_patches() -> None:
+    """Patch memu-py 1.4.0 SQLite bugs before MemoryService construction.
+
+    Bug 1: Resource/MemoryItem/MemoryCategory base models define
+    ``embedding: list[float] | None`` as a Pydantic field.  The SQLite models
+    attempt to shadow it with a ``@property`` + ``embedding_json`` pair, but
+    Pydantic v2 ignores the property and keeps the inherited field.  SQLModel's
+    ``table=True`` then fails because ``list`` has no SQLAlchemy type mapping.
+    Fix: patch ``get_sqlalchemy_type`` to fall back to ``JSON`` for unmapped types.
+
+    Bug 2: Table names use the ``sqlite_`` prefix which is reserved by SQLite.
+    Fix: replace ``get_sqlite_sqlalchemy_models`` to use ``memu_`` prefix.
+    """
+    import sqlmodel.main as _sqlmodel_main
+
+    _orig_get_sa_type = _sqlmodel_main.get_sqlalchemy_type
+
+    def _patched_get_sa_type(field: Any) -> Any:
+        try:
+            return _orig_get_sa_type(field)
+        except ValueError:
+            from sqlalchemy import JSON
+
+            return JSON()
+
+    _sqlmodel_main.get_sqlalchemy_type = _patched_get_sa_type
+
+    import memu.database.sqlite.schema as _schema
+    import memu.database.sqlite.sqlite as _sqlite_mod
+
+    _schema._MODEL_CACHE.clear()
+
+    def _patched_get_models(*, scope_model: type[BaseModel] | None = None) -> Any:
+        from sqlalchemy import MetaData
+        from sqlmodel import SQLModel
+
+        from memu.database.sqlite.models import (
+            SQLiteCategoryItemModel,
+            SQLiteMemoryCategoryModel,
+            SQLiteMemoryItemModel,
+            SQLiteResourceModel,
+            build_sqlite_table_model,
+        )
+
+        scope = scope_model or BaseModel
+        cached = _schema._MODEL_CACHE.get(scope)
+        if cached:
+            return cached
+
+        metadata_obj = MetaData()
+        resource_model = build_sqlite_table_model(
+            scope, SQLiteResourceModel, tablename="memu_resources", metadata=metadata_obj,
+        )
+        memory_category_model = build_sqlite_table_model(
+            scope, SQLiteMemoryCategoryModel, tablename="memu_memory_categories", metadata=metadata_obj,
+        )
+        memory_item_model = build_sqlite_table_model(
+            scope, SQLiteMemoryItemModel, tablename="memu_memory_items", metadata=metadata_obj,
+        )
+        category_item_model = build_sqlite_table_model(
+            scope, SQLiteCategoryItemModel, tablename="memu_category_items", metadata=metadata_obj,
+        )
+
+        class _SQLiteBase(SQLModel):
+            __abstract__ = True
+            metadata = metadata_obj
+
+        models = _schema.SQLiteSQLAModels(
+            Base=_SQLiteBase,
+            Resource=resource_model,
+            MemoryCategory=memory_category_model,
+            MemoryItem=memory_item_model,
+            CategoryItem=category_item_model,
+        )
+        _schema._MODEL_CACHE[scope] = models
+        return models
+
+    _schema.get_sqlite_sqlalchemy_models = _patched_get_models
+    _sqlite_mod.get_sqlite_sqlalchemy_models = _patched_get_models
+
+
 def init_mcp_server(service: MemoryService) -> Any:
     """Bind a MemoryService instance to the MCP server."""
     global _service
@@ -320,6 +401,57 @@ def _build_database_config(db: str, db_path: str | None, db_dsn: str | None) -> 
     return {"metadata_store": {"provider": "inmemory"}}
 
 
+def _debug_log(msg: str, data: dict[str, Any] | None = None) -> None:
+    """Write a debug log entry to the debug log file."""
+    # #region agent log
+    import time as _time
+    _log_path = "/Users/yin/memU-mcp/.cursor/debug-f663d3.log"
+    _entry = {"sessionId": "f663d3", "timestamp": int(_time.time() * 1000), "location": "server.py", "message": msg, "data": data or {}}
+    try:
+        with open(_log_path, "a") as _f:
+            _f.write(json.dumps(_entry, default=str) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
+
+def _diagnose_sqlite_models() -> None:
+    """Diagnose SQLite model field issues before MemoryService construction."""
+    # #region agent log
+    try:
+        from memu.database.sqlite.models import SQLiteResourceModel, SQLiteMemoryItemModel, SQLiteMemoryCategoryModel
+        from memu.database.models import Resource, MemoryItem, MemoryCategory
+
+        _debug_log("H-A: Resource.model_fields keys", {"fields": list(Resource.model_fields.keys()), "hypothesisId": "A"})
+        _debug_log("H-A: SQLiteResourceModel.model_fields keys", {"fields": list(SQLiteResourceModel.model_fields.keys()), "hypothesisId": "A"})
+        _debug_log("H-A: 'embedding' in SQLiteResourceModel.model_fields", {"result": "embedding" in SQLiteResourceModel.model_fields, "hypothesisId": "A"})
+
+        embedding_attr = SQLiteResourceModel.__dict__.get("embedding")
+        _debug_log("H-C: SQLiteResourceModel.__dict__['embedding'] type", {"type": str(type(embedding_attr)), "is_property": isinstance(embedding_attr, property), "hypothesisId": "C"})
+
+        for cls in SQLiteResourceModel.__mro__:
+            if "embedding" in getattr(cls, "__annotations__", {}):
+                ann = cls.__annotations__["embedding"]
+                _debug_log("H-B: 'embedding' annotation found in MRO", {"class": cls.__name__, "annotation": str(ann), "annotation_type": str(type(ann)), "hypothesisId": "B"})
+
+        _debug_log("H-D: MCPUserModel bases", {"bases": [b.__name__ for b in MCPUserModel.__mro__], "hypothesisId": "D"})
+        _debug_log("H-D: SQLiteResourceModel bases", {"bases": [b.__name__ for b in SQLiteResourceModel.__mro__], "hypothesisId": "D"})
+
+        merged = type("TestMerged", (MCPUserModel, SQLiteResourceModel), {"__module__": __name__})
+        _debug_log("H-A: Merged model_fields keys", {"fields": list(merged.model_fields.keys()), "hypothesisId": "A"})
+        _debug_log("H-A: 'embedding' in merged.model_fields", {"result": "embedding" in merged.model_fields, "hypothesisId": "A"})
+
+        merged_embedding_attr = merged.__dict__.get("embedding")
+        for cls in merged.__mro__:
+            if "embedding" in cls.__dict__:
+                _debug_log("H-C: 'embedding' in __dict__ of MRO class", {"class": cls.__name__, "type": str(type(cls.__dict__["embedding"])), "hypothesisId": "C"})
+                break
+
+    except Exception as exc:
+        _debug_log("Diagnostic error", {"error": str(exc), "type": type(exc).__name__})
+    # #endregion
+
+
 def main() -> None:
     """CLI entry point for the memU MCP server."""
     import argparse
@@ -374,6 +506,14 @@ def main() -> None:
     db_path = _resolve(args.db_path, "MEMU_DB_PATH")
     db_dsn = _resolve(args.db_dsn, "MEMU_DB_DSN")
 
+    # #region agent log
+    _debug_log("main() started", {"db": db, "db_path": db_path, "hypothesisId": "A"})
+    _diagnose_sqlite_models()
+    # #endregion
+
+    if db == "sqlite":
+        _apply_sqlite_compat_patches()
+
     llm_default: dict[str, Any] = {
         "api_key": api_key,
         "base_url": base_url,
@@ -389,11 +529,17 @@ def main() -> None:
 
     database_config = _build_database_config(db, db_path, db_dsn)
 
+    # #region agent log
+    _debug_log("Creating MemoryService...", {"db": db, "runId": "post-fix"})
+    # #endregion
     service = MemoryService(
         llm_profiles=llm_profiles,
         database_config=database_config,
         user_config={"model": MCPUserModel},
     )
+    # #region agent log
+    _debug_log("MemoryService created successfully!", {"db_type": type(service.database).__name__, "runId": "post-fix"})
+    # #endregion
     init_mcp_server(service)
 
     logger.info("Starting memU MCP server (transport=%s, db=%s)", args.transport, db)
